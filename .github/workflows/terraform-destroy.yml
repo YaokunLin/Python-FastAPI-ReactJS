@@ -1,0 +1,48 @@
+name: 'Destroy Cluster'
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 10 * * *' # 1000 UTC == 300 PST == 600 EST
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: 'Terraform'
+    runs-on: ubuntu-latest
+    environment: google-cloud-infrastructure
+
+    # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
+    defaults:
+      run:
+        shell: bash
+        # Inform a working directory if .tf files are not in root folder
+        working-directory: ./examples/simple_autopilot_public
+
+    steps:
+      # Checkout the repository to the GitHub Actions runner
+    - name: Checkout
+      uses: actions/checkout@v3
+      # Install the latest version of Terraform CLI and configure the Terraform CLI configuration file with a Terraform Cloud user API token
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v1
+
+    # Initialize a new or existing Terraform working directory
+    - name: Terraform Init
+      run: terraform init
+      env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }} 
+
+    # Generates an execution plan for Terraform
+    - name: Terraform Plan
+      run: terraform plan -destroy -input=false
+      env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }} 
+
+    # Spin down resources
+    - name: Terraform Destroy
+      run: terraform destroy -auto-approve -input=false
+      env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }} 

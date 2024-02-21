@@ -1,0 +1,65 @@
+name: 'Build Image to Google Container Registry'
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: 'read'
+  id-token: 'write'
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    environment: google-cloud-infrastructure 
+
+    # Use the Bash shell regardless whether the GitHub Actions runner is ubuntu-latest, macos-latest, or windows-latest
+    defaults:
+      run:
+        shell: bash
+          # Uncomment and set if .tf files are not in the root folder
+          # working-directory: ./hello-world
+
+    steps:
+      # Checkout the repository to the GitHub Actions runner
+      - uses: actions/checkout@v3
+
+      # Authenticate with Google Cloud using Service Account Key
+      - id: 'auth'
+        name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v1'
+        with:
+          token_format: 'access_token'
+          credentials_json: ${{ secrets.GCP_SA_KEY }} # see above
+
+      # Docker login using the access token
+      - uses: 'docker/login-action@v1'
+        with:
+          registry: 'gcr.io'
+          username: 'oauth2accesstoken'
+          password: '${{ steps.auth.outputs.access_token }}'
+
+      # Run docker login directly to artifact registry
+      - run: |-
+          echo '${{ steps.auth.outputs.access_token }}' | docker login -u oauth2accesstoken --password-stdin https://gcr.io
+
+      # Set up Docker Buildx, Configure Google Cloud CLI, Build and push the Docker image
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Configure Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v0.3
+        with:
+          version: 'latest'
+    
+      - name: Authenticate with Google Cloud
+        run: gcloud auth configure-docker
+    
+      - name: Build and push the Docker image
+        uses: docker/build-push-action@v3
+        with:
+          context: hello-world
+          push: true
+          tags: |
+            gcr.io/${{ env.GCP_PROJECT }}/hello-world:latest
+            gcr.io/${{ env.GCP_PROJECT }}/hello-world:${{ github.sha }}

@@ -1,0 +1,99 @@
+name: Deploy to Public Autopilot
+
+on:
+  workflow_dispatch: # manual ONLY
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: google-cloud-infrastructure
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Cache Google Cloud SDK
+      uses: actions/cache@v2
+      with:
+        path: ~/google-cloud-sdk
+        key: ${{ runner.os }}-google-cloud-sdk-${{ hashFiles('**/setup-gcloud@v0.3.0') }}
+
+    - name: Setup Google Cloud CLI
+      uses: google-github-actions/setup-gcloud@v0.3.0
+      with:
+        service_account_key: ${{ secrets.GCP_SA_KEY }}
+        project_id: ${{ vars.GCP_PROJECT }}
+        export_default_credentials: true
+
+    - name: Install gke-gcloud-auth-plugin
+      run: |
+        gcloud components install gke-gcloud-auth-plugin
+
+    - name: Configure kubectl context
+      run: |
+        gcloud container clusters get-credentials ${{ vars.GCP_GKE_PUBLIC_AUTOPILOT_NAME }} --region ${{ vars.GCP_REGION }}
+
+    # Check if GHCR Secret in Kubernetes exists and create if not
+    - name: Create or Update GHCR Secret in Kubernetes
+      run: |
+        if ! kubectl get secret ghcr-secret; then
+          kubectl create secret docker-registry ghcr-secret \
+            --docker-server=ghcr.io \
+            --docker-username=${{ secrets.GHCR_USERNAME }} \
+            --docker-password=${{ secrets.GHCR_PAT }} \
+            --docker-email=${{ secrets.GHCR_EMAIL }}
+          kubectl patch serviceaccount default -p '{"imagePullSecrets": [{"name": "ghcr-secret"}]}'
+        else
+          echo "GHCR secret already exists, skipping creation."
+          fi
+
+    # Deploy to GKE using the secret for GHCR
+    - name: Deploy to GKE
+      run: |
+        kubectl apply -f hello-world/hello-world-deployment.yaml
+
+    - name: Expose Deployment Conditionally
+      run: |
+        if ! kubectl get svc hello-world; then
+          kubectl expose deployment hello-world --type=LoadBalancer --port=80
+          # Wait for LoadBalancer IP
+          end=$((SECONDS+300))
+          while [ $SECONDS -lt $end ]; do
+            IP=$(kubectl get svc hello-world -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            if [[ -z "$IP" ]]; then
+              echo "Waiting for LoadBalancer IP..."
+              sleep 10
+            else
+              echo "LoadBalancer IP is $IP"
+              break
+            fi
+          done
+        else
+          echo "Service already exists, skipping creation."
+          IP=$(kubectl get svc hello-world -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "Existing LoadBalancer IP is $IP"
+        fi
+
+    - name: Get Service Details
+      run: |
+        kubectl get svc hello-world
+
+    - name: Update DNS Record
+      env:
+        DNS_ZONE: ${{ vars.GCP_DNS_ZONE_NAME }}
+        DNS_NAME: 'hello.google.buttoncloud.ca.'
+        GCP_PROJECT: ${{ vars.GCP_PROJECT }}
+      run: |
+        IP=$(kubectl get svc hello-world -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+        if [[ -z "$IP" ]]; then
+          echo "No LoadBalancer IP found, cannot update DNS."
+          exit 1
+        fi
+        echo "Updating DNS to point to $IP"
+        gcloud dns record-sets transaction start --zone=$DNS_ZONE --project=$GCP_PROJECT
+        OLD_IP=$(gcloud dns record-sets list --zone=$DNS_ZONE --name=$DNS_NAME --type=A --format="value(rrdatas[0])" --project=$GCP_PROJECT)
+        if [[ -n "$OLD_IP" ]]; then
+          gcloud dns record-sets transaction remove --zone=$DNS_ZONE --name=$DNS_NAME --type=A --ttl=300 "$OLD_IP" --project=$GCP_PROJECT
+        fi
+        gcloud dns record-sets transaction add --zone=$DNS_ZONE --name=$DNS_NAME --type=A --ttl=300 "$IP" --project=$GCP_PROJECT
+        gcloud dns record-sets transaction execute --zone=$DNS_ZONE --project=$GCP_PROJECT

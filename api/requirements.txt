@@ -1,0 +1,11 @@
+dnspython==2.3.0
+fastapi==0.103.1
+fastapi_utils
+httpcore==0.13.7
+pydantic
+uvicorn>=0.15.0,<0.16.0
+requests
+python-dotenv
+gspread>=5.10.0
+httpx==0.19.0
+pytest=8.0.0

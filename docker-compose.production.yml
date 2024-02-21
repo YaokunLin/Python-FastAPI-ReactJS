@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres
+    restart: always
+    volumes: 
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: Password1
+    ports:
+      - 5432:5432
+
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - 8080:8080
+
+  frontend: ## Image will come from somewhere when we build the CI (e.g. image: my-app_frontend >> image: ghcr.io/button-inc/iot-system-prototype/frontend:latest)
+    image: my-app_frontend 
+    ports:
+      - "80:3000"
+    depends_on:
+      - backend
+
+  backend: ## Image will come from somewhere when we build the CI
+    image: my-app_backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgres://postgres:Password1@db:5432/postgres
+    depends_on:
+      - db
+
+volumes:
+  pgdata:
